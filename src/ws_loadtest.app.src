@@ -1,0 +1,12 @@
+{application, ws_loadtest,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { ws_loadtest, []}},
+  {env, []}
+ ]}.
