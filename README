@@ -3,7 +3,8 @@ Have erlang installed.
 
 Edit start.config and make your changes.
 
-Run ./start.sh
+Compile: ./rebar compile
+Run: ./start.sh
 
 Remember, this is a very simple client designed not to be a full websocket client implementation. It should just look like one enough to hold TCP connections open.
 
