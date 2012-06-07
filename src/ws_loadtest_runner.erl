@@ -14,6 +14,7 @@
 -export([start_link/0]).
 
 -export([connect/1]).
+-export([make_client_socket/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -86,10 +87,14 @@ make_hello(Host, Port, Path) ->
     "Sec-WebSocket-Version: 13\r\n" ++
     "\r\n".
 
-make_client(Host, Port, Hello) ->
+make_client_socket(Host, Port, Hello, Owner) ->
     {ok, Sock} = gen_tcp:connect(Host, Port, [binary, {packet, 0}]),
     ok = gen_tcp:send(Sock, Hello),
-    Sock.
+    ok = gen_tcp:controlling_process(Sock, Owner).
+    
+
+make_client(Host, Port, Hello) ->
+    spawn(?MODULE, make_client_socket, [Host, Port, Hello, self()]).
 
 %%--------------------------------------------------------------------
 %% @private
