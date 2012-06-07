@@ -13,9 +13,12 @@
 %% API
 -export([start_link/0]).
 
+-export([connect/1]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
+
 
 -define(SERVER, ?MODULE). 
 
@@ -38,8 +41,11 @@ start_link() ->
     Host = config(host, unde),
     Port = config(port, unde),
     Path = config(path, unde),
-    Count = config(count, uned),
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path}, Count], []).
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path}], []).
+
+
+connect(Count) ->
+    gen_server:cast(?SERVER, {connect, Count}).
 
 
 config(Name, Default) ->
@@ -63,12 +69,10 @@ config(Name, Default) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([WS, Count]) ->
+init([WS]) ->
     erlang:display(WS),
     {Host, Port, Path} = WS,
-    Hello = make_hello(Host, Port, Path),
-    Connections = [ make_client(Host, Port, Hello) || _ <- lists:seq(1, Count)  ],
-    {ok, #state{host=Host, port=Port, path=Path, connections=Connections}}.
+    {ok, #state{host=Host, port=Port, path=Path}}.
 
 make_hello(Host, Port, Path) ->
     "GET "++ Path ++" HTTP/1.1\r\n" ++ 
@@ -115,6 +119,10 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_cast({connect, Count}, State) ->
+    Hello = make_hello(State#state.host, State#state.port, State#state.path),
+    [ make_client(State#state.host, State#state.port, Hello) || _ <- lists:seq(1, Count)  ],
+    {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
