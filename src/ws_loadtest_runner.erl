@@ -39,9 +39,9 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-    Host = config(host, unde),
-    Port = config(port, unde),
-    Path = config(path, unde),
+    Host = config(host, undefined),
+    Port = config(port, undefined),
+    Path = config(path, undefined),
     gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path}], []).
 
 
