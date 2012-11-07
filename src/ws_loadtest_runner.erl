@@ -23,7 +23,7 @@
 
 -define(SERVER, ?MODULE). 
 
--record(state, {host, port, path, connections}).
+-record(state, {host, ips, port, path, connections}).
 
 %%%===================================================================
 %%% API
@@ -40,9 +40,10 @@
 %%--------------------------------------------------------------------
 start_link() ->
     Host = config(host, undefined),
+    {ok, IpList} = inet:getaddrs(Host, inet),
     Port = config(port, undefined),
     Path = config(path, undefined),
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path}], []).
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, IpList, Port, Path}], []).
 
 
 connect(Count) ->
@@ -72,8 +73,8 @@ config(Name, Default) ->
 %%--------------------------------------------------------------------
 init([WS]) ->
     erlang:display(WS),
-    {Host, Port, Path} = WS,
-    {ok, #state{host=Host, port=Port, path=Path}}.
+    {Host, IpList, Port, Path} = WS,
+    {ok, #state{host=Host, ips=IpList, port=Port, path=Path}}.
 
 make_hello(Host, Port, Path) ->
     "GET "++ Path ++" HTTP/1.1\r\n" ++ 
@@ -87,14 +88,15 @@ make_hello(Host, Port, Path) ->
     "Sec-WebSocket-Version: 13\r\n" ++
     "\r\n".
 
-make_client_socket(Host, Port, Hello, Owner) ->
-    {ok, Sock} = gen_tcp:connect(Host, Port, [binary, {packet, 0}]),
+make_client_socket(Ip, Port, Hello, Owner) ->
+    {ok, Sock} = gen_tcp:connect(Ip, Port, [binary, {packet, 0}]),
     ok = gen_tcp:send(Sock, Hello),
     ok = gen_tcp:controlling_process(Sock, Owner).
-    
 
-make_client(Host, Port, Hello) ->
-    spawn(?MODULE, make_client_socket, [Host, Port, Hello, self()]).
+make_client(Ips, Port, Hello, ClientID) ->
+    WhichIp = ClientID rem erlang:length(Ips),
+    Ip = lists:nth( (WhichIp+1) , Ips),
+    spawn(?MODULE, make_client_socket, [Ip, Port, Hello, self()]).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -126,7 +128,7 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 handle_cast({connect, Count}, State) ->
     Hello = make_hello(State#state.host, State#state.port, State#state.path),
-    [ make_client(State#state.host, State#state.port, Hello) || _ <- lists:seq(1, Count)  ],
+    [ make_client(State#state.ips, State#state.port, Hello, Index) || Index <- lists:seq(1, Count)  ],
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
