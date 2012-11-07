@@ -1,10 +1,15 @@
 
-Have erlang installed.
+Have erlang installed. Any version of 14 or greater should work fine.
 
-Edit start.config and make your changes.
+Edit start.config to set where the loadtest will connect to. 
 
 Compile: ./rebar compile
 Run: ./start.sh
+
+When it starts it does not make any connections to the websocket server. To make connections run this at the erlang shell prompt: 
+ws_loadtest_runner:connect(100). 
+
+You can repeat this command to add aditional clients. This does not guarantee that N number will be added. Check netstat on the destination machine to see how many connections are in an established state. If the websocket server does not accept clients fast enough you will get timeouts reported in the erlang shell.
 
 Remember, this is a very simple client designed not to be a full websocket client implementation. It should just look like one enough to hold TCP connections open.
 
