@@ -71,6 +71,7 @@ config(Name, Default) ->
 %% @end
 %%--------------------------------------------------------------------
 init([WS]) ->
+    io:format("Settings: ~p~n", [WS]),
     {Host, Port, Path} = WS,
     {ok, #state{host=Host, port=Port, path=Path}}.
 
@@ -126,7 +127,7 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 handle_cast({connect, Count}, State) ->
     {ok, IpList} = inet:getaddrs(State#state.host, inet),
-    io:format("Connecting to: ~p", [IpList]),
+    io:format("Connecting to: ~p~n", [IpList]),
     Hello = make_hello(State#state.host, State#state.port, State#state.path),
     [ make_client(IpList, State#state.port, Hello, Index) || Index <- lists:seq(1, Count)  ],
     {noreply, State};
