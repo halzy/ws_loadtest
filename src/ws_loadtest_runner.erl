@@ -23,7 +23,7 @@
 
 -define(SERVER, ?MODULE). 
 
--record(state, {host, ips, port, path, connections}).
+-record(state, {host, port, path, connections}).
 
 %%%===================================================================
 %%% API
@@ -40,10 +40,9 @@
 %%--------------------------------------------------------------------
 start_link() ->
     Host = config(host, undefined),
-    {ok, IpList} = inet:getaddrs(Host, inet),
     Port = config(port, undefined),
     Path = config(path, undefined),
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, IpList, Port, Path}], []).
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path}], []).
 
 
 connect(Count) ->
@@ -72,9 +71,8 @@ config(Name, Default) ->
 %% @end
 %%--------------------------------------------------------------------
 init([WS]) ->
-    erlang:display(WS),
-    {Host, IpList, Port, Path} = WS,
-    {ok, #state{host=Host, ips=IpList, port=Port, path=Path}}.
+    {Host, Port, Path} = WS,
+    {ok, #state{host=Host, port=Port, path=Path}}.
 
 make_hello(Host, Port, Path) ->
     "GET "++ Path ++" HTTP/1.1\r\n" ++ 
@@ -127,8 +125,10 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({connect, Count}, State) ->
+    {ok, IpList} = inet:getaddrs(State#state.host, inet),
+    io:format("Connecting to: ~p", [IpList]),
     Hello = make_hello(State#state.host, State#state.port, State#state.path),
-    [ make_client(State#state.ips, State#state.port, Hello, Index) || Index <- lists:seq(1, Count)  ],
+    [ make_client(IpList, State#state.port, Hello, Index) || Index <- lists:seq(1, Count)  ],
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -143,7 +143,8 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    io:format("Socket Info: ~p", [Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
