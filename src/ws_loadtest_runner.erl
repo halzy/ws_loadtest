@@ -143,8 +143,16 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_info({tcp, _Socket, _Data}, State) ->
+    {noreply, State};
+handle_info({tcp_closed, Socket}, State) ->
+    io:format("Socket Closed: ~p~n", [Socket]),
+    {noreply, State};
+handle_info({tcp_error, Socket, Reason}, State) ->
+    io:format("Socket Error: (~p) ~p~n", [Socket, Reason]),
+    {noreply, State};
 handle_info(Info, State) ->
-    io:format("Socket Info: ~p", [Info]),
+    io:format("Info: ~p~n", [Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
