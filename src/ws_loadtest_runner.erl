@@ -33,6 +33,8 @@
     conncount,
     connpending,
     connfailed,
+    connclosed,
+    connerror,
     timer_ref
 }).
 
@@ -89,7 +91,7 @@ init([WS]) ->
     io:format("Settings: ~p~n", [WS]),
     {ok, TimerRef} = timer:send_interval(1000, update),
     {Host, Port, Path, SSL, ConnPerSec} = WS,
-    {ok, #state{host=Host, port=Port, path=Path, ssl=SSL, conncount=0, connmax=0, connpending=0, connfailed=0, connpersec=ConnPerSec, timer_ref=TimerRef}}.
+    {ok, #state{host=Host, port=Port, path=Path, ssl=SSL, conncount=0, connmax=0, connpending=0, connfailed=0, connclosed=0, connerror=0, connpersec=ConnPerSec, timer_ref=TimerRef}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -146,20 +148,20 @@ handle_info(connected, State=#state{conncount=ConnCount,connpending=ConnPending}
     {noreply, State#state{conncount=(ConnCount+1),connpending=(ConnPending-1)}};
 handle_info(connfailed, State=#state{connpending=ConnPending,connfailed=ConnFailed}) ->
     {noreply, State#state{connpending=(ConnPending-1),connfailed=(ConnFailed+1)}};
-handle_info({ssl_closed, Socket}, State=#state{conncount=ConnCount}) ->
+handle_info({ssl_closed, Socket}, State=#state{conncount=ConnCount,connclosed=ConnClosed}) ->
     io:format("SSL Socket Closed: ~p~n", [Socket]),
-    {noreply, State#state{conncount=(ConnCount-1)}};
-handle_info({ssl_error, Socket, Reason}, State=#state{conncount=ConnCount}) ->
+    {noreply, State#state{conncount=(ConnCount-1),connclosed=(ConnClosed+1)}};
+handle_info({tcp_closed, Socket}, State=#state{conncount=ConnCount,connclosed=ConnClosed}) ->
+    io:format("Socket Closed: ~p~n", [Socket]),
+    {noreply, State#state{conncount=(ConnCount-1),connclosed=(ConnClosed+1)}};
+handle_info({ssl_error, Socket, Reason}, State=#state{conncount=ConnCount,connerror=ConnError}) ->
     io:format("SSL Socket Error: (~p) ~p~n", [Socket, Reason]),
     gen_tcp:close(Socket),
-    {noreply, State#state{conncount=(ConnCount-1)}};
-handle_info({tcp_closed, Socket}, State=#state{conncount=ConnCount}) ->
-    io:format("Socket Closed: ~p~n", [Socket]),
-    {noreply, State#state{conncount=(ConnCount-1)}};
-handle_info({tcp_error, Socket, Reason}, State=#state{conncount=ConnCount}) ->
+    {noreply, State#state{conncount=(ConnCount-1),connerror=(ConnError+1)}};
+handle_info({tcp_error, Socket, Reason}, State=#state{conncount=ConnCount,connerror=ConnError}) ->
     io:format("Socket Error: (~p) ~p~n", [Socket, Reason]),
     gen_tcp:close(Socket),
-    {noreply, State#state{conncount=(ConnCount-1)}};
+    {noreply, State#state{conncount=(ConnCount-1),connerror=(ConnError+1)}};
 handle_info(Info, State) ->
     io:format("Info: ~p~n", [Info]),
     {noreply, State}.
@@ -198,7 +200,9 @@ update(State) ->
     ConnCount = State#state.conncount,
     ConnPending = State#state.connpending,
     ConnFailed = State#state.connfailed,
-    io:format("Connection Count: ~p Pending: ~p Failed: ~p ~n", [ConnCount, ConnPending, ConnFailed]),
+    ConnClosed = State#state.connclosed,
+    ConnError = State#state.connerror,
+    io:format("Connections Active: ~p Pending: ~p Failed: ~p Closed: ~p Error: ~p~n", [ConnCount, ConnPending, ConnFailed, ConnClosed, ConnError]),
     start_connections(State).
 
 start_connections(State=#state{connpending=ConnPending,connpersec=ConnPerSec}) ->
