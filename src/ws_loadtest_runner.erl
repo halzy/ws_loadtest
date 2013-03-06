@@ -13,17 +13,28 @@
 %% API
 -export([start_link/0]).
 
--export([connect/1]).
--export([make_client_socket/4]).
+-export([max_connections/1]).
+-export([connpersec/1]).
+-export([make_client_socket/5]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
-
 -define(SERVER, ?MODULE). 
 
--record(state, {host, port, path, connections}).
+-record(state, {
+    host, 
+    port, 
+    path, 
+    ssl, 
+    connmax,
+    connpersec,
+    conncount,
+    connpending,
+    connfailed,
+    timer_ref
+}).
 
 %%%===================================================================
 %%% API
@@ -42,12 +53,16 @@ start_link() ->
     Host = config(host, undefined),
     Port = config(port, undefined),
     Path = config(path, undefined),
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path}], []).
+    SSL  = config(ssl, undefined),
+    ConnPerSec = config(connpersec, undefined),
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [{Host, Port, Path, SSL, ConnPerSec}], []).
 
 
-connect(Count) ->
-    gen_server:cast(?SERVER, {connect, Count}).
+max_connections(ConnMax) ->
+    gen_server:cast(?SERVER, {connmax, ConnMax}).
 
+connpersec(ConnPerSec) ->
+    gen_server:cast(?SERVER, {connpersec, ConnPerSec}).
 
 config(Name, Default) ->
     case application:get_env(ws_loadtest, Name) of
@@ -72,30 +87,9 @@ config(Name, Default) ->
 %%--------------------------------------------------------------------
 init([WS]) ->
     io:format("Settings: ~p~n", [WS]),
-    {Host, Port, Path} = WS,
-    {ok, #state{host=Host, port=Port, path=Path}}.
-
-make_hello(Host, Port, Path) ->
-    "GET "++ Path ++" HTTP/1.1\r\n" ++ 
-    "Upgrade: WebSocket\r\nConnection: Upgrade\r\n" ++ 
-    "Host: " ++ Host ++ ":" ++ erlang:integer_to_list(Port) ++ "\r\n" ++
-    "Origin: " ++ Host ++ ":" ++ erlang:integer_to_list(Port) ++ "\r\n" ++
-    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
-    %"Accept: */*\r\n" ++
-    %"Referer: http://halzy.sportvision.com/debug/cup/html/raceview.html\r\n" ++
-    %"Connection: keep-alive\r\n" ++ 
-    "Sec-WebSocket-Version: 13\r\n" ++
-    "\r\n".
-
-make_client_socket(Ip, Port, Hello, Owner) ->
-    {ok, Sock} = gen_tcp:connect(Ip, Port, [binary, {packet, 0}]),
-    ok = gen_tcp:send(Sock, Hello),
-    ok = gen_tcp:controlling_process(Sock, Owner).
-
-make_client(Ips, Port, Hello, ClientID) ->
-    WhichIp = ClientID rem erlang:length(Ips),
-    Ip = lists:nth( (WhichIp+1) , Ips),
-    spawn(?MODULE, make_client_socket, [Ip, Port, Hello, self()]).
+    {ok, TimerRef} = timer:send_interval(1000, update),
+    {Host, Port, Path, SSL, ConnPerSec} = WS,
+    {ok, #state{host=Host, port=Port, path=Path, ssl=SSL, conncount=0, connmax=0, connpending=0, connfailed=0, connpersec=ConnPerSec, timer_ref=TimerRef}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -125,12 +119,10 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({connect, Count}, State) ->
-    {ok, IpList} = inet:getaddrs(State#state.host, inet),
-    io:format("Connecting to: ~p~n", [IpList]),
-    Hello = make_hello(State#state.host, State#state.port, State#state.path),
-    [ make_client(IpList, State#state.port, Hello, Index) || Index <- lists:seq(1, Count)  ],
-    {noreply, State};
+handle_cast({connmax, ConnMax}, State) ->
+    {noreply, State#state{connmax=ConnMax}};
+handle_cast({connpersec, ConnPerSec}, State) ->
+    {noreply, State#state{connpersec=ConnPerSec}};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -146,12 +138,28 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({tcp, _Socket, _Data}, State) ->
     {noreply, State};
-handle_info({tcp_closed, Socket}, State) ->
+handle_info({ssl, _Socket, _Data}, State) ->
+    {noreply, State};
+handle_info(update, State) ->
+    {noreply, update(State)};
+handle_info(connected, State=#state{conncount=ConnCount,connpending=ConnPending}) ->
+    {noreply, State#state{conncount=(ConnCount+1),connpending=(ConnPending-1)}};
+handle_info(connfailed, State=#state{connpending=ConnPending,connfailed=ConnFailed}) ->
+    {noreply, State#state{connpending=(ConnPending-1),connfailed=(ConnFailed+1)}};
+handle_info({ssl_closed, Socket}, State=#state{conncount=ConnCount}) ->
+    io:format("SSL Socket Closed: ~p~n", [Socket]),
+    {noreply, State#state{conncount=(ConnCount-1)}};
+handle_info({ssl_error, Socket, Reason}, State=#state{conncount=ConnCount}) ->
+    io:format("SSL Socket Error: (~p) ~p~n", [Socket, Reason]),
+    gen_tcp:close(Socket),
+    {noreply, State#state{conncount=(ConnCount-1)}};
+handle_info({tcp_closed, Socket}, State=#state{conncount=ConnCount}) ->
     io:format("Socket Closed: ~p~n", [Socket]),
-    {noreply, State};
-handle_info({tcp_error, Socket, Reason}, State) ->
+    {noreply, State#state{conncount=(ConnCount-1)}};
+handle_info({tcp_error, Socket, Reason}, State=#state{conncount=ConnCount}) ->
     io:format("Socket Error: (~p) ~p~n", [Socket, Reason]),
-    {noreply, State};
+    gen_tcp:close(Socket),
+    {noreply, State#state{conncount=(ConnCount-1)}};
 handle_info(Info, State) ->
     io:format("Info: ~p~n", [Info]),
     {noreply, State}.
@@ -167,7 +175,8 @@ handle_info(Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{timer_ref=TRef}) ->
+    {ok, cancel} = timer:cancel(TRef),
     ok.
 
 %%--------------------------------------------------------------------
@@ -184,3 +193,65 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+update(State) ->
+    ConnCount = State#state.conncount,
+    ConnPending = State#state.connpending,
+    ConnFailed = State#state.connfailed,
+    io:format("Connection Count: ~p Pending: ~p Failed: ~p ~n", [ConnCount, ConnPending, ConnFailed]),
+    start_connections(State).
+
+start_connections(State=#state{connpending=ConnPending,connpersec=ConnPerSec}) ->
+    ConnLeft = State#state.connmax - State#state.conncount - ConnPending,
+    CanConn = case ConnLeft of
+        ConnLeft when ConnLeft < ConnPerSec ->
+            ConnLeft;
+        _ -> ConnPerSec
+    end,
+    case CanConn of
+        DoConnect when DoConnect > 0 ->
+            {ok, IpList} = inet:getaddrs(State#state.host, inet),
+            io:format("Connecting to: ~p~n", [IpList]),
+            Hello = make_hello(State#state.host, State#state.port, State#state.path),
+            [ make_client(IpList, State#state.port, Hello, Index, State#state.ssl) || Index <- lists:seq(1, DoConnect) ];
+        _ -> ok
+    end,
+    State#state{connpending=(ConnPending+CanConn)}.
+
+make_hello(Host, Port, Path) ->
+    "GET "++ Path ++" HTTP/1.1\r\n" ++ 
+    "Upgrade: WebSocket\r\nConnection: Upgrade\r\n" ++ 
+    "Host: " ++ Host ++ ":" ++ erlang:integer_to_list(Port) ++ "\r\n" ++
+    "Origin: " ++ Host ++ ":" ++ erlang:integer_to_list(Port) ++ "\r\n" ++
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" ++
+    %"Accept: */*\r\n" ++
+    %"Referer: http://halzy.sportvision.com/debug/cup/html/raceview.html\r\n" ++
+    %"Connection: keep-alive\r\n" ++ 
+    "Sec-WebSocket-Version: 13\r\n" ++
+    "\r\n".
+
+make_client_socket(Ip, Port, Hello, Owner, SSL) ->
+    case SSL of
+        true ->
+            case ssl:connect(Ip, Port, [binary, {packet, 0}]) of
+                {ok, SSLSock} -> 
+                    Owner ! connected,
+                    ok = ssl:send(SSLSock, Hello),
+                    ok = ssl:controlling_process(SSLSock, Owner);
+                _ -> Owner ! connfailed
+            end;
+        _ ->
+            case gen_tcp:connect(Ip, Port, [binary, {packet, 0}]) of
+                {ok, TCPSock} -> 
+                    Owner ! connected,
+                    ok = gen_tcp:send(TCPSock, Hello),
+                    ok = gen_tcp:controlling_process(TCPSock, Owner);
+                _ -> Owner ! connfailed
+            end
+    end.
+
+
+make_client(Ips, Port, Hello, ClientID, SSL) ->
+    WhichIp = ClientID rem erlang:length(Ips),
+    Ip = lists:nth( (WhichIp+1) , Ips),
+    spawn(?MODULE, make_client_socket, [Ip, Port, Hello, self(), SSL]).
